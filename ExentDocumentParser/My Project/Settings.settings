@@ -1,0 +1,21 @@
+﻿<?xml version='1.0' encoding='utf-8'?>
+<SettingsFile xmlns="http://schemas.microsoft.com/VisualStudio/2004/01/settings" CurrentProfile="(Default)" GeneratedClassNamespace="My" GeneratedClassName="MySettings" UseMySettingsClassName="true">
+  <Profiles />
+  <Settings>
+    <Setting Name="RPC_SoapAction_ABNSearch" Type="System.String" Scope="User">
+      <Value Profile="(Default)">http://abr.business.gov.au/ABRXMLSearchRPC/ABRSearchByABN</Value>
+    </Setting>
+    <Setting Name="Document_SoapAction_ABNSearch" Type="System.String" Scope="User">
+      <Value Profile="(Default)">http://abr.business.gov.au/ABRXMLSearch/ABRSearchByABN</Value>
+    </Setting>
+    <Setting Name="RPC_ABRXMLSearchURL" Type="System.String" Scope="User">
+      <Value Profile="(Default)">http://abr.business.gov.au/ABRXMLSearchRPC/ABRXMLSearch.asmx</Value>
+    </Setting>
+    <Setting Name="Document_ABRXMLSearchURL" Type="System.String" Scope="User">
+      <Value Profile="(Default)">http://abr.business.gov.au/ABRXMLSearch/ABRXMLSearch.asmx</Value>
+    </Setting>
+    <Setting Name="SoapRequestTimeoutInMilliseconds" Type="System.String" Scope="User">
+      <Value Profile="(Default)">100000</Value>
+    </Setting>
+  </Settings>
+</SettingsFile>
