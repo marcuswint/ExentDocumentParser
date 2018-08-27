@@ -113,6 +113,30 @@ Namespace My
                 Me("SoapRequestTimeoutInMilliseconds") = value
             End Set
         End Property
+        
+        <Global.System.Configuration.UserScopedSettingAttribute(),  _
+         Global.System.Diagnostics.DebuggerNonUserCodeAttribute(),  _
+         Global.System.Configuration.DefaultSettingValueAttribute("C:\Program Files (x86)\CogniView\PDF2XL\PDF2XL.exe")>  _
+        Public Property PDF2XL_Executable() As String
+            Get
+                Return CType(Me("PDF2XL_Executable"),String)
+            End Get
+            Set
+                Me("PDF2XL_Executable") = value
+            End Set
+        End Property
+        
+        <Global.System.Configuration.UserScopedSettingAttribute(),  _
+         Global.System.Diagnostics.DebuggerNonUserCodeAttribute(),  _
+         Global.System.Configuration.DefaultSettingValueAttribute("True")>  _
+        Public Property PDF2XL_Trial() As Boolean
+            Get
+                Return CType(Me("PDF2XL_Trial"),Boolean)
+            End Get
+            Set
+                Me("PDF2XL_Trial") = value
+            End Set
+        End Property
     End Class
 End Namespace
 

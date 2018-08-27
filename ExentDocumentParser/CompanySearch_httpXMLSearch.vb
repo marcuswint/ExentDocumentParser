@@ -4,7 +4,7 @@ Imports System.Configuration
 '---------------------------------------------------------------------------------------------
 ' Non-Strongly Typed Search - Builds the SOAP message as a string. 
 '---------------------------------------------------------------------------------------------
-Public MustInherit Class httpXMLSearch
+Public MustInherit Class CompanySearch_httpXMLSearch
     Public Enum StyleEnum
         RPC = 1
         Document = 2

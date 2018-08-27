@@ -3,7 +3,7 @@ Imports System.Xml
 Imports System.Xml.Serialization
 Imports System.IO
 
-Public Class ResultsInterpreter
+Public Class CompanySearch_ResultsInterpreter
     '-----------------------------------------------------------------------------------------------
     ' Return payload as an XML String
     '-----------------------------------------------------------------------------------------------

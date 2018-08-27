@@ -17,5 +17,11 @@
     <Setting Name="SoapRequestTimeoutInMilliseconds" Type="System.String" Scope="User">
       <Value Profile="(Default)">100000</Value>
     </Setting>
+    <Setting Name="PDF2XL_Executable" Type="System.String" Scope="User">
+      <Value Profile="(Default)">C:\Program Files (x86)\CogniView\PDF2XL\PDF2XL.exe</Value>
+    </Setting>
+    <Setting Name="PDF2XL_Trial" Type="System.Boolean" Scope="User">
+      <Value Profile="(Default)">True</Value>
+    </Setting>
   </Settings>
 </SettingsFile>

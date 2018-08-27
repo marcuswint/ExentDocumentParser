@@ -3,7 +3,7 @@ Imports System.IO
 '-----------------------------------------------------------------------------------------------
 ' Non-Strongly Typed Search - Builds the SOAP message as a string. 
 '-----------------------------------------------------------------------------------------------
-Public Class httpXMLDocumentSearch : Inherits httpXMLSearch
+Public Class CompanySearch_httpXMLDocumentSearch : Inherits CompanySearch_httpXMLSearch
     '-----------------------------------------------------------------------------------------------
     ' Prefix in config file
     '-----------------------------------------------------------------------------------------------

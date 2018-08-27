@@ -1,5 +1,8 @@
 ﻿Imports System.IO
-Module GeneralFunctions
+Imports Microsoft.Office.Interop
+
+Module Utils
+    Public TextBoxForLogging As Object
     Dim LogFile As String = Environment.CurrentDirectory & "\Logs\" + Now.ToString("yyyy-MM-dd") + "_ExentDocParser.log"
 
     Enum LogLevels
@@ -49,7 +52,46 @@ Module GeneralFunctions
                 LevelString = "Error"
         End Select
 
-        sw.WriteLine(Now.ToString("HH:mm:ss.ffff") + " " + LevelString + " " + Message)
+        Dim LogText As String = Now.ToString("HH:mm:ss.ffff") + " " + LevelString + " " + Message
+
+        If Not IsNothing(TextBoxForLogging) Then
+            'TextBoxForLogging.Text = TextBoxForLogging.Text & vbCrLf & LogText
+            TextBoxForLogging.AppendText(LogText & vbCrLf)
+        End If
+
+        sw.WriteLine(LogText)
+
         sw.Close()
     End Sub
+
+#Region "Excel Utils"
+    Public Function GetCellValue(ws As Excel.Worksheet, Row As Long, Column As Long) As String
+        If IsNothing(ws.Cells(Row, Column).Value) Then
+            Return ""
+        Else
+            Return ws.Cells(Row, Column).Value.ToString
+        End If
+    End Function
+#End Region
+
+#Region "Ductionary"
+    Public Sub AddHeaderData(ByRef d As Dictionary(Of String, String), Key As String, Data As String)
+        If d.ContainsKey(Key) Then
+            d(Key) = Data
+        Else
+            d.Add(Key, Data)
+        End If
+
+    End Sub
+
+    Public Function GetHeaderData(d As Dictionary(Of String, String), Key As String, Optional DefaultValue As String = "") As String
+        If d.ContainsKey(Key) Then
+            Return d(Key)
+        Else
+            Return DefaultValue
+        End If
+
+    End Function
+
+#End Region
 End Module

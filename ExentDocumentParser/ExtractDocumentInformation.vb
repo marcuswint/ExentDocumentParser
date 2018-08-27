@@ -13,392 +13,571 @@ Module ExtractDocumentInformation
 
     Dim ExcelApp As Excel.Application
     Dim f As FormActivity
-    Dim SheetContents As Object
     Dim ShowOfficeApplications As Boolean
 
-    Public Sub GetDocumentContents(WordDocument As String, ExcelWorkbook As String, ProcessingTemplatesFolder As String, ByRef HeaderData As Dictionary(Of String, String), ByRef DetailsData As DataTable, Optional DisplayOfficeApps As Boolean = False)
+    Dim AppDataPath As String = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Exent\DocumentParser\")
+    Dim WorkingPath As String = Path.Combine(AppDataPath, "Working")
+
+    Public Sub GetDocumentContents(PDFDocument As String, ExcelWorkbook As String, WordDocument As String, ByRef HeaderData As Dictionary(Of String, String), ByRef DetailsData As DataTable, Optional DisplayOfficeApps As Boolean = False, Optional LogTextBox As Object = Nothing)
         Dim wb As Excel.Workbook
         Dim ws As Excel.Worksheet
-        Dim ProcessingData As Data.DataTable
-        Dim ProcessingTemplate As String
-        Dim ABN As String
-        Dim Value As String = ""
-        Dim InvoiceTotal As Decimal
+        Dim PDFWorkingFile As String = ""
+        'Dim ProcessingData As Data.DataTable
 
-        Dim CompanyName As String = ""
+        TextBoxForLogging = LogTextBox
 
         f = New FormActivity
         f.Show()
 
         ' ***************************************************************************
+        ' Make sure App Data Working Path exists
+        If Not Directory.Exists(WorkingPath) Then Directory.CreateDirectory(WorkingPath)
+        'Make sure working path is empty
+        Dim file As String = ""
+        Try
+            For Each file In Directory.GetFiles(WorkingPath)
+                IO.File.Delete(file)
+            Next
+        Catch ex As Exception
+            Log(LogLevels.Warning, "Can't delete file - " + file)
+        End Try
+
+        ' ***************************************************************************
+        ' Kill all Excel Processes
+        For Each P As Process In System.Diagnostics.Process.GetProcessesByName("excel")
+            P.Kill()
+        Next
+
+        ' ***************************************************************************
+        ' Load Excel Application
         UpdateStatus(f, "Loading Excel...")
         ExcelApp = New Excel.Application
         ExcelApp.Visible = DisplayOfficeApps
 
-        ' See if the Excel Workbook already exists (all converted - most likely only going to ne used in testing)
-        If File.Exists(ExcelWorkbook) Then
-            wb = ExcelApp.Workbooks.Open(ExcelWorkbook)
-        ElseIf WordDocument <> "" Then
-            ' Create New Excel Document 
-            wb = ExcelApp.Workbooks.Add
-            wb.SaveAs(ExcelWorkbook)
-
-            UpdateStatus(f, "Converting Content to Spreadsheet...")
-            ConvertDOCXToXLSX(f, WordDocument, ExcelApp, wb, DisplayOfficeApps)
-        Else
-            ' Nothing to Do...
-
-            Exit Sub
-        End If
-
-        ' Set the Worksheet
-        ws = wb.ActiveSheet
-
-        'UnMergeCells(ws)
-        'DeleteEmptyRows(ws)
-
         ' ***************************************************************************
-        Dim Myrange As Excel.Range = ws.Range(ws.Cells(1, 1), ws.Cells(ws.UsedRange.Rows.Count, ws.UsedRange.Columns.Count))
-
-        ' Get the Sheet Contents into Array for fast reading
-        SheetContents = Myrange.Value
-
-        ' Load the Data from the Default Template
-        UpdateStatus(f, "Loading the Default Processing Template...")
-        ProcessingTemplate = ProcessingTemplatesFolder + "Default.xlsx"
-        ProcessingData = GetProcessingTemplateData(ProcessingTemplate)
-
-        Log(LogLevels.Trace, "Setting Defaults for Invoice...")
-        AddHeaderData(HeaderData, "InvoiceValid", "TRUE")
+        AddHeaderData(HeaderData, "DocumentValid", "TRUE")
         AddHeaderData(HeaderData, "Exceptions", "")
 
-        ' ***************************************************************************
-        ' **** Get ABN **** REQUIRED ****
-        Log(LogLevels.Trace, "Getting ABN...")
-        ABN = GetValueFromSpreadsheet("ABN", FieldTypes.ABN, ProcessingData)
-        ' Remnove Spaces from ABN
-        ABN = ABN.Replace(" ", "")
-        AddHeaderData(HeaderData, "ABN", ABN)
-        If ABN = "" Then SetInvoiceInvalid(HeaderData, "Missing ABN!")
-        Log(LogLevels.Trace, "ABN = " + ABN)
+        If PDFDocument.Length > 0 Then
+            UpdateStatus(f, "Converting PDF...")
+            PDFWorkingFile = Path.Combine(WorkingPath, Path.GetFileName(PDFDocument))
+            ' Move file to Working Folder
+            IO.File.Copy(PDFDocument, PDFWorkingFile, True)
+            PDFDocument = PDFWorkingFile
 
-        ' **** Get Company Name ****
-        ' Use Web Service
-        If ABN <> "" Then
-            Log(LogLevels.Trace, "Getting Company Name...")
-            Value = GetCompanyName(ABN)
-            Log(LogLevels.Trace, "Company Name = " + Value)
-        Else
-            Value = ""
-        End If
-        AddHeaderData(HeaderData, "InvoiceCompany", Value)
+        ElseIf ExcelWorkbook.Length > 0 Then
+            UpdateStatus(f, "Converting Excel Workbook...")
 
-        ' ***************************************************************************
-        ' **** Check for Custom Processing Template ****
-        Log(LogLevels.Trace, "Checking for Processing Templates Folder...")
-        If Directory.GetFiles(ProcessingTemplatesFolder, ABN + "*.xlsx").Count > 0 Then
-            UpdateStatus(f, "Loading the Custom Processing Template...")
-            ' Get the first file in the list (should only be 1)
-            ProcessingTemplate = Directory.GetFiles(ProcessingTemplatesFolder, ABN + "*.xlsx")(0)
-            ' Load the Custom Processing Template
-            ProcessingData = GetProcessingTemplateData(ProcessingTemplate)
+            SetInvoiceInvalid(HeaderData, "Excel Conversion Not Currently Supported - Please contact Exent Support.")
+
+            PDFWorkingFile = Path.Combine(WorkingPath, Path.GetFileNameWithoutExtension(ExcelWorkbook), ".pdf")
+
+            ' TO DO - Open using Excel and Export to PDF
+
+        ElseIf WordDocument.Length > 0 Then
+            UpdateStatus(f, "Converting Word Document...")
+
+            SetInvoiceInvalid(HeaderData, "Word Conversion Not Currently Supported - Please contact Exent Support.")
+
+            PDFWorkingFile = Path.Combine(WorkingPath, Path.GetFileNameWithoutExtension(WordDocument), ".pdf")
+
+            ' TO DO - Open using Word and Export to PDF
         End If
 
         ' ***************************************************************************
-        UpdateStatus(f, "Closing Excel...")
-        wb.Close(True)
-        ExcelApp.Quit()
+        ' If PDF Document Exists - Extract Information
+        If PDFWorkingFile.Length > 0 Then
 
-        releaseObject(ExcelApp)
-        releaseObject(wb)
+            ' **** Create a new Temp Workbook in Excel and Add PDF File as OLE Object to find the Page Size of the PDF
+            UpdateStatus(f, "Getting PDF Page Orientation...")
+            wb = ExcelApp.Workbooks.Add()
+            ws = wb.Worksheets(1)
 
-        ' ***************************************************************************
-        ' **** Get Invoice Number **** REQUIRED ****
-        Log(LogLevels.Trace, "Getting Invoice Number...")
-        Value = GetValueFromSpreadsheet("InvoiceNumber", FieldTypes.String, ProcessingData)
-        Log(LogLevels.Trace, "Invoice Number = " + Value)
-        AddHeaderData(HeaderData, "InvoiceNumber", Value)
-        If Value = "" Then SetInvoiceInvalid(HeaderData, "Missing Invoice Number!")
+            ws.OLEObjects.Add(Filename:=PDFWorkingFile, Link:=False, DisplayAsIcon:=False).Select
 
-        ' **** Get Order Number **** REQUIRED ****
-        Value = GetValueFromSpreadsheet("OrderNumber", FieldTypes.String, ProcessingData)
-        AddHeaderData(HeaderData, "OrderNumber", Value)
-        If Value = "" Then SetInvoiceInvalid(HeaderData, "Missing Order Number!")
+            Dim PDFHeight As Long = ws.OLEObjects(1).Height
+            Dim PDFWidth As Long = ws.OLEObjects(1).Width
+            Dim IsPDFPortrait As Boolean = PDFHeight > PDFWidth
 
-        ' **** Get Date ****
-        Value = GetValueFromSpreadsheet("InvoiceDate", FieldTypes.Date, ProcessingData)
-        ' Convert to Standard Format
-        If IsDate(Value) Then
-            Value = CDate(Value).ToString("d/MM/yyyy")
-        Else
-            Value = ""
-        End If
-        AddHeaderData(HeaderData, "InvoiceDate", Value)
+            wb.Close(False)
 
-        ' **** Get Due Date ****
-        Value = GetValueFromSpreadsheet("InvoiceDueDate", FieldTypes.Date, ProcessingData)
-        ' Convert to Standard Format
-        If IsDate(Value) Then
-            Value = CDate(Value).ToString("d/MM/yyyy")
-        Else
-            Value = ""
-        End If
-        AddHeaderData(HeaderData, "InvoiceDueDate", Value)
 
-        ' **** Get Terms ****
-        Value = GetValueFromSpreadsheet("InvoiceTerms", FieldTypes.String, ProcessingData)
-        ' Convert to Standard Format
-        If Value <> "" Then
-            ' Get numerical numbers only (check if between 1 and 100 - 7/14/30/60/90)
-            Dim TermsDays As String = Regex.Replace(Value, "[^0-9 ]", "")
-            ' Get the first 3 characters only - in case other numbers in string
-            TermsDays = Strings.Left(TermsDays.Trim, 3).Trim
-            ' Get the Text Only to find if Days/Invoice/Statement 
-            Dim TermsPeriod As String = Regex.Replace(Value, "[^a-zA-Z ]", "")
+            ' *** Classify PDF Document - Get the Document Type and Source Information
+            UpdateStatus(f, "Classifying PDF Document...")
+            ' Convert contents of PDF Invoice using PDF2XL with Full Document Layout for Orientation to Excel
+            Dim ExcelWorkingFile As String = Path.Combine(WorkingPath, "FileContents.xlsx")
+            Dim DocumentType As String = ""
+            Dim DocumentSourceReference As String = ""
 
-            If TermsPeriod.ToUpper.Contains("DAY") Or IsNumeric(TermsDays) Then Value = TermsDays + "DAYS"
-            If TermsPeriod.ToUpper.Contains("INV") Or TermsPeriod.ToUpper.Contains("NET") Then Value = Value + " INVOICE"
-            If TermsPeriod.ToUpper.Contains("MONTH") Or TermsPeriod.ToUpper.Contains("EOM") Then Value = Value + " EOM"
-            If TermsPeriod.ToUpper.Contains("ST") Then Value = Value + " STATEMENT"
-        End If
-        AddHeaderData(HeaderData, "InvoiceTerms", Value)
+            ' Get the Document Classification Matrix & Search for content
+            If ClassifyDocument(HeaderData, PDFWorkingFile, ExcelWorkingFile, IsPDFPortrait, DocumentType, DocumentSourceReference) Then
+                Log(LogLevels.Info, "Document Type - " + DocumentType)
+                Log(LogLevels.Info, "Document Source Reference - " + DocumentSourceReference)
 
-        ' **** Get Total Value of Invoice **** REQUIRED ****
-        Value = GetValueFromSpreadsheet("InvoiceTotal", FieldTypes.Currency, ProcessingData)
-        AddHeaderData(HeaderData, "InvoiceTotal", Value)
-        If IsNumeric(Value) Then
-            InvoiceTotal = CDec(Value)
-        Else
-            SetInvoiceInvalid(HeaderData, "Missing Invoice Total!")
-        End If
+                AddHeaderData(HeaderData, "DocumentType", DocumentType)
+                AddHeaderData(HeaderData, "DocumentSourceReference", DocumentSourceReference)
 
-        ' **** Get Total Value of GST ****
-        Value = GetValueFromSpreadsheet("InvoiceGST", FieldTypes.Currency, ProcessingData)
-        AddHeaderData(HeaderData, "InvoiceGST", Value)
-
-        ' **** Get Invoice Details ****
-        Dim HeaderRow As Long = 0       ' Row Number that Header Starts
-        Dim HeaderRowSpan As Long = 1   ' How many rows in Header
-        Dim DetailsRowSpan As Long = 1         ' How many rows in Detail Lines
-        Dim LastRow As Long = 0         ' Last Row of Details
-
-        DetailsData = CreasteDetailsDataTable()
-
-        ' Get the Start Row of Details
-        HeaderRow = GetRowFromSpreadsheet("InvoiceHeader", FieldTypes.String, ProcessingData, HeaderRowSpan)
-
-        If HeaderRow > 0 Then
-
-            ' Get the End Row of Details
-            LastRow = GetRowFromSpreadsheet("InvoiceDetailsEnd", FieldTypes.String, ProcessingData) - 1
-
-                ' Get the Row Span of Details
-                GetRowFromSpreadsheet("InvoiceDetails", FieldTypes.String, ProcessingData, DetailsRowSpan)
-
-                If LastRow > 0 Then
-                    ' Add Records for each row
-                    Dim RowID As Integer = 1
-                    For DetailRow As Long = HeaderRow + HeaderRowSpan To LastRow Step DetailsRowSpan
-                        'Dim dr As DataRow = DetailsData.NewRow
-                        'dr("ID") = ID
-                        DetailsData.Rows.Add(RowID)
-                        RowID += 1
-                    Next
-
-                    For DetailsCol As Long = 1 To 7
-                        Dim DetailHeader = ""
-                        Dim DetailColumn As Long
-                        Dim CellColumnSplit As String = ""
-                        Dim CellColumn As String = ""
-
-                        Select Case DetailsCol
-                            Case 1 : DetailHeader = "ItemsCode"
-                            Case 2 : DetailHeader = "ItemsDescription"
-                            Case 3 : DetailHeader = "ItemsQty"
-                            Case 4 : DetailHeader = "ItemsExTax"
-                            Case 5 : DetailHeader = "ItemsIncTax"
-                            Case 6 : DetailHeader = "ItemsExExtended"
-                            Case 7 : DetailHeader = "ItemsIncExtended"
-                        End Select
-
-                        ' Find the header in the header cells and get the column it is in
-                        DetailColumn = GetColForDetailFromSpreadsheet(ProcessingData, DetailHeader, HeaderRow, LastRow, CellColumnSplit, CellColumn)
-
-                        If DetailColumn > 0 Then
-                            ' Go through each of the rows below and update the Details Table
-                            RowID = 1
-                            For DetailRow As Long = HeaderRow + HeaderRowSpan To LastRow Step DetailsRowSpan
-                                Dim DetailValue As String = SheetContents(DetailRow, DetailColumn)
-
-                                If CellColumnSplit <> "" And IsNumeric(CellColumn) Then
-                                    Dim CellsColumns() As String = Split(DetailValue, CellColumnSplit.Replace("""", ""))
-                                    ' Remove any empty values from array
-                                    For i = CellsColumns.Length - 1 To 0 Step -1
-                                        If CellsColumns(i).Trim = "" Then
-                                            CellsColumns = CellsColumns.Where(Function(item, index) index <> i).ToArray
-                                        Else
-                                            CellsColumns(i) = CellsColumns(i).Trim
-                                        End If
-                                    Next
-
-                                    If CellsColumns.Count >= CLng(CellColumn) Then
-                                        DetailValue = CellsColumns(CLng(CellColumn) - 1) ' -1 is due to 0 index array
-                                    End If
-                                End If
-
-                                Select Case DetailsCol
-                                    Case 1 : DetailsData.Rows(RowID - 1)("Code") = DetailValue
-                                    Case 2 : DetailsData.Rows(RowID - 1)("Description") = DetailValue
-                                    Case 3 : If IsNumeric(DetailValue) Then DetailsData.Rows(RowID - 1)("Qty") = CDec(DetailValue)
-                                    Case 4 : If IsNumeric(DetailValue) Then DetailsData.Rows(RowID - 1)("UnitExTax") = CDec(DetailValue)
-                                    Case 5 : If IsNumeric(DetailValue) Then DetailsData.Rows(RowID - 1)("UnitIncTax") = CDec(DetailValue)
-                                    Case 6 : If IsNumeric(DetailValue) Then DetailsData.Rows(RowID - 1)("ExtendedExTax") = CDec(DetailValue)
-                                    Case 7 : If IsNumeric(DetailValue) Then DetailsData.Rows(RowID - 1)("ExtendedIncTax") = CDec(DetailValue)
-                                End Select
-
-                                RowID += 1
-                            Next
-                        End If
-                    Next
+                If DocumentType.Length = 0 Or DocumentSourceReference.Length = 0 Then
+                    SetInvoiceInvalid(HeaderData, "Document Type/Source Reference Not Found in Document Classification Matrix.")
                 Else
-                    SetInvoiceInvalid(HeaderData, "Missing Invoice Details - Can not find end of Details!")
-                End If
-            Else
-                SetInvoiceInvalid(HeaderData, "Missing Invoice Details - Can not find Header!")
-        End If
+                    ' *** Read PDF Document
+                    UpdateStatus(f, "Reading Contents of PDF using Document/Source Layout(s)...")
+                    ' Convert contents of PDF Invoice using PDF2XL with the Specified Layout(s) for Document Type & Source to Excel
+                    If ConvertPDFUsingLayoutFiles(HeaderData, PDFWorkingFile, ExcelWorkingFile, DocumentType, DocumentSourceReference) Then
 
-        ' Validate the Detail Line Contents
-        For RowIdx As Long = 0 To DetailsData.Rows.Count - 1
-            If DetailsData.Rows(RowIdx)("Qty").ToString = "" Then
-                SetInvoiceInvalid(HeaderData, "Missing Invoice Details - No Quantiy for Line " + (RowIdx + 1).ToString + "!")
-            ElseIf DetailsData.Rows(RowIdx)("UnitExTax").ToString = "" And DetailsData.Rows(RowIdx)("UnitIncTax").ToString = "" And DetailsData.Rows(RowIdx)("ExtendedExTax").ToString = "" And DetailsData.Rows(RowIdx)("ExtendedIncTax").ToString = "" Then
-                SetInvoiceInvalid(HeaderData, "Missing Invoice Details - No Pricing for Line " + (RowIdx + 1).ToString + "!")
-            Else
+                        ' *** Read Content From Spreadsheet
+                        Dim ExtraTables As New Dictionary(Of String, DataTable)
+                        ReadContentFromSpreadsheet(HeaderData, DetailsData, ExtraTables, ExcelWorkingFile)
 
-                ' Get Invoice GST Rate (Default 10%) - TO DO - Should we validate this against the Doc Total and GDT Total
-                Dim GSTRate As Decimal = 10
+                        ' *** Run Post Conversion Tasks
+                        ' Open the tasks spreadsheet for the Document Type & Source 
+                        Dim PostTasks As DataTable = GetPostConversionTasks(Path.Combine(AppDataPath, "Processing - Post Convestion Tasks\" + DocumentType + "_" + DocumentSourceReference + ".xlsx"))
 
-                ' Update Missing Data
-                ' Missing Unit Ex Tax & Inc Tax but not ExtendedExTax
-                If DetailsData.Rows(RowIdx)("UnitExTax").ToString = "" And DetailsData.Rows(RowIdx)("UnitIncTax").ToString = "" And DetailsData.Rows(RowIdx)("ExtendedExTax").ToString <> "" Then
-                    DetailsData.Rows(RowIdx)("UnitExTax") = Math.Round(DetailsData.Rows(RowIdx)("ExtendedExTax") / DetailsData.Rows(RowIdx)("Qty"), 2)
-                End If
+                        ' Apply each of the tasks to the DataTables
+                        For Each dr As DataRow In PostTasks.Rows
+                            Select Case dr("Action").ToString.ToUpper
+                                Case "Clean Invoice Details".ToUpper
+                                    CleanInvoiceDetails(DetailsData, dr)
 
-                ' Missing Unit Ex Tax & Inc Tax but not ExtendedIncTax
-                If DetailsData.Rows(RowIdx)("UnitExTax").ToString = "" And DetailsData.Rows(RowIdx)("UnitIncTax").ToString = "" And DetailsData.Rows(RowIdx)("ExtendedIncTax").ToString <> "" Then
-                    DetailsData.Rows(RowIdx)("UnitIncTax") = Math.Round(DetailsData.Rows(RowIdx)("ExtendedIncTax") / DetailsData.Rows(RowIdx)("Qty"), 2)
-                End If
+                                Case "Get Header Content".ToUpper, "Replace Header Content".ToUpper
+                                    UpdateHeaderContent(HeaderData, DetailsData, ExtraTables, dr)
 
-                ' Missing Unit Ex Tax & Inc Tax but not ExtendedExTax
-                If DetailsData.Rows(RowIdx)("ExtendedExTax").ToString = "" And DetailsData.Rows(RowIdx)("ExtendedIncTax").ToString = "" And DetailsData.Rows(RowIdx)("UnitExTax").ToString <> "" Then
-                    DetailsData.Rows(RowIdx)("ExtendedExTax") = Math.Round(DetailsData.Rows(RowIdx)("UnitExTax") * DetailsData.Rows(RowIdx)("Qty"), 2)
-                End If
+                            End Select
+                        Next
 
-                ' Missing Extended Ex Tax & Exetended Inc Tax but not Unit Inc Tax
-                If DetailsData.Rows(RowIdx)("ExtendedExTax").ToString = "" And DetailsData.Rows(RowIdx)("ExtendedIncTax").ToString = "" And DetailsData.Rows(RowIdx)("UnitIncTax").ToString <> "" Then
-                    DetailsData.Rows(RowIdx)("ExtendedIncTax") = Math.Round(DetailsData.Rows(RowIdx)("UnitIncTax") * DetailsData.Rows(RowIdx)("Qty"), 2)
-                End If
+                        ' *** Update Detail Values 
+                        UpdateDetails(DetailsData)
 
-                ' Missing Unit Ex Tax - ExtTax = IncTax / 1.1
-                If DetailsData.Rows(RowIdx)("UnitExTax").ToString = "" And DetailsData.Rows(RowIdx)("UnitIncTax").ToString <> "" Then
-                    DetailsData.Rows(RowIdx)("UnitExTax") = Math.Round(DetailsData.Rows(RowIdx)("UnitIncTax") / ((100 + GSTRate) / 100), 2)
-
-                    ' Missing Unit Inc Tax - IncTax = ExtTax * 1.1
-                ElseIf DetailsData.Rows(RowIdx)("UnitExTax").ToString <> "" And DetailsData.Rows(RowIdx)("UnitIncTax").ToString = "" Then
-                    DetailsData.Rows(RowIdx)("UnitIncTax") = Math.Round(DetailsData.Rows(RowIdx)("UnitExTax") * ((100 + GSTRate) / 100), 2)
-                End If
-
-                ' Missing Exetended Ex Tax - ExtTax = IncTax / 1.1
-                If DetailsData.Rows(RowIdx)("ExtendedExTax").ToString = "" And DetailsData.Rows(RowIdx)("ExtendedIncTax").ToString <> "" Then
-                    DetailsData.Rows(RowIdx)("ExtendedExTax") = Math.Round(DetailsData.Rows(RowIdx)("ExtendedIncTax") / ((100 + GSTRate) / 100), 2)
-
-                    ' Missing Unit Inc Tax - IncTax = ExtTax * 1.1
-                ElseIf DetailsData.Rows(RowIdx)("ExtendedExTax").ToString <> "" And DetailsData.Rows(RowIdx)("ExtendedIncTax").ToString = "" Then
-                    DetailsData.Rows(RowIdx)("ExtendedIncTax") = Math.Round(DetailsData.Rows(RowIdx)("ExtendedExTax") * ((100 + GSTRate) / 100), 2)
+                        ' *** Update and Validate Values 
+                        UpdateAndValidateHeader(HeaderData, DetailsData)
+                    End If
                 End If
             End If
-        Next
+        End If
+
+        UpdateStatus(f, "Closing Excel...")
+        ExcelApp.Quit()
+        releaseObject(ExcelApp)
 
         f.Close()
 
     End Sub
 
-    Private Sub UnMergeCells(ws As Excel.Worksheet)
-        Dim C As Excel.Range
+    Private Function ClassifyDocument(ByRef HeaderData As Dictionary(Of String, String), PDFWorkingFile As String, ExcelWorkingFile As String, IsPDFPortrait As Boolean, ByRef DocumentType As String, ByRef DocumentSourceReference As String) As Boolean
+        Dim wb As Excel.Workbook
+        Dim ws As Excel.Worksheet
+        Dim LayoutFile As String
 
-        ExcelApp.FindFormat.Clear()
-        ExcelApp.FindFormat.MergeCells = True
-        C = ws.Cells.Find("", SearchFormat:=True)
-        Do While Not C Is Nothing
-            C.UnMerge()
-            C = ws.Cells.Find("", SearchFormat:=True)
-        Loop
-        ExcelApp.FindFormat.Clear()
-    End Sub
-
-    Private Sub DeleteEmptyRows(ws As Excel.Worksheet)
-        ' Clear the Empty Cells
-        ' For Each Row (backwards - to allow for deletes
-        For row As Long = ws.UsedRange.Rows.Count To 1 Step -1
-            Dim RowEmpty As Boolean = True
-            ' Go through Columns
-            For col As Long = 1 To ws.UsedRange.Columns.Count
-                Dim cell As Excel.Range = ws.Cells(row, col)
-
-                If String.IsNullOrEmpty(cell.Value) Then
-                    RowEmpty = False
-                End If
-            Next
-
-            If RowEmpty Then
-                ws.Rows(row).EntireRow.Delete
-            End If
-        Next
-    End Sub
-
-    Private Sub DeleteEmptyRowsAndCells(ws As Excel.Worksheet)
-        ' Clear the Empty Cells
-        ' For Each Row (backwards - to allow for deletes
-        For row As Long = ws.UsedRange.Rows.Count To 1 Step -1
-            Dim RowEmpty As Boolean = True
-            ' Go through Columns, If empty delete the cell
-            For col As Long = ws.UsedRange.Columns.Count - 1 To 1 Step -1
-                Dim cell As Excel.Range = ws.Cells(row, col)
-                Dim DeleteCell As Boolean = False
-
-                If Not String.IsNullOrEmpty(cell.Value) Then
-                    If cell.Value.ToString = "" Then
-                        DeleteCell = True
-                    Else
-                        RowEmpty = False
-                    End If
-                Else
-                    DeleteCell = True
-                End If
-
-                If DeleteCell Then cell.Delete(Excel.XlDeleteShiftDirection.xlShiftToLeft)
-            Next
-
-            If RowEmpty Then
-                ws.Rows(row).EntireRow.Delete
-            End If
-        Next
-    End Sub
-
-    Private Sub AddHeaderData(d As Dictionary(Of String, String), Key As String, Data As String)
-        If d.ContainsKey(Key) Then
-            d(Key) = Data
+        If IsPDFPortrait Then
+            LayoutFile = Path.Combine(AppDataPath, "Processing - Layouts", "AllContent_Portrait.layoutx")
         Else
-            d.Add(Key, Data)
+            LayoutFile = Path.Combine(AppDataPath, "Processing - Layouts", "AllContent_Landscape.layoutx")
+        End If
+
+        Dim PDF2XLArguments As String = "-input=""" + PDFWorkingFile + """ " +
+                                            "-layout=""" + LayoutFile + """ " +
+                                            "-format=excelfile " +
+                                            "-output=""" + ExcelWorkingFile + """ " +
+                                            "-existingfile=replace " +
+                                            "-noui"
+
+        Dim startInfo As New ProcessStartInfo
+        startInfo.FileName = My.Settings.PDF2XL_Executable
+        startInfo.Arguments = PDF2XLArguments
+        startInfo.UseShellExecute = True
+        Dim Converter As System.Diagnostics.Process = Process.Start(startInfo)
+        Dim timeout As Integer = 60000 '1 minute in milliseconds
+
+        If Not Converter.WaitForExit(timeout) Then
+            AddHeaderData(HeaderData, "DocumentValid", "FALSE")
+            AddHeaderData(HeaderData, "Exceptions", "Timeout waiting for PDF2XL Conversion.")
+
+            Return False
+        Else
+            ' Open Document Classification Matrix Spreadsheet and read into DataTable
+            Dim Matrix As New DataTable
+            Matrix = GetDocumentClassificationMatrix(Path.Combine(AppDataPath, "Processing - Document Classification\Document Classification Matrix.xlsx"))
+
+            ' Open Excel Working File Spreadsheet
+            wb = ExcelApp.Workbooks.Open(ExcelWorkingFile, [ReadOnly]:=True)
+
+            ' Set the Worksheet
+            ws = wb.Sheets(1)
+
+            ' Get the Sheet Contents into Array for fast reading
+            Dim Contents As Object
+            Contents = ws.Range(ws.Cells(1, 1), ws.Cells(ws.UsedRange.Rows.Count, ws.UsedRange.Columns.Count)).Value
+
+            ' Close Excel Files
+            wb.Close(False)
+
+            ' Iterate through DataTable looking for match
+            For Each dr As DataRow In Matrix.Rows
+                ' Search for Values
+                Dim SearchText1 As String = dr("SearchText1").ToString
+                Dim SearchText2 As String = dr("SearchText2").ToString
+                Dim SearchText3 As String = dr("SearchText3").ToString
+
+                Dim LineFound As Boolean
+                LineFound = (RegExSearch(Contents, SearchText1) <> "")
+                If LineFound And SearchText2 <> "" Then LineFound = (RegExSearch(Contents, SearchText2) <> "")
+                If LineFound And SearchText3 <> "" Then LineFound = (RegExSearch(Contents, SearchText3) <> "")
+
+                If LineFound Then
+                    DocumentType = dr("DocumentType")
+                    DocumentSourceReference = dr("DocumentSourceReference")
+                    Exit For
+                End If
+            Next
+
+            Return True
+        End If
+    End Function
+
+    Private Function ConvertPDFUsingLayoutFiles(ByRef HeaderData As Dictionary(Of String, String), PDFWorkingFile As String, ExcelWorkingFile As String, DocumentType As String, DocumentSourceReference As String) As Boolean
+        Dim LayoutCount As Long = 0
+        Dim PDFConverted As Boolean = True
+
+        For Each SpecificLayoutFile As String In Directory.GetFiles(Path.Combine(AppDataPath, "Processing - Layouts"), DocumentType & "_" & DocumentSourceReference & "*.layoutx")
+            LayoutCount += 1
+
+            Log(LogLevels.Info, "Layout # " + LayoutCount.ToString)
+            Log(LogLevels.Info, "Layout File - " + SpecificLayoutFile)
+
+            Dim ExistingFileAction As String
+            If LayoutCount = 1 Then
+                ExistingFileAction = "replace"
+            Else
+                ExistingFileAction = "append"
+            End If
+
+            Dim PDF2XLArguments As String = "-input=""" + PDFWorkingFile + """ " +
+                                            "-layout=""" + SpecificLayoutFile + """ " +
+                                            "-format=excelfile " +
+                                            "-output=""" + ExcelWorkingFile + """ " +
+                                            "-existingfile=" + ExistingFileAction + " " +
+                                            "-noui"
+
+            Dim startInfo As New ProcessStartInfo
+            startInfo.FileName = My.Settings.PDF2XL_Executable
+            startInfo.Arguments = PDF2XLArguments
+            startInfo.UseShellExecute = True
+
+            Dim Converter As System.Diagnostics.Process = Process.Start(startInfo)
+            Dim timeout As Integer = 60000 '1 minute in milliseconds
+
+            If Not Converter.WaitForExit(timeout) Then
+                AddHeaderData(HeaderData, "DocumentValid", "FALSE")
+                AddHeaderData(HeaderData, "Exceptions", "Timeout waiting for PDF2XL Conversion.")
+
+                PDFConverted = False
+                Exit For
+            End If
+        Next
+
+        Return PDFConverted
+    End Function
+
+    Private Sub ReadContentFromSpreadsheet(ByRef HeaderData As Dictionary(Of String, String), ByRef DetailsData As DataTable, ByRef ExtraTables As Dictionary(Of String, DataTable), ExcelWorkingFile As String)
+        Dim wb As Excel.Workbook
+        Dim ws As Excel.Worksheet
+
+        wb = ExcelApp.Workbooks.Open(ExcelWorkingFile, [ReadOnly]:=True)
+        ' Go through each sheet
+
+        For Each ws In wb.Worksheets
+            Dim SheetStartRow As Long = 2
+            If My.Settings.PDF2XL_Trial Then SheetStartRow = 5
+
+            Dim CurrentSection As String = ""
+            Dim SectionStartRow As Long = 0
+
+            ' Read through sheet and find key field in column 1 (Field/Details/Table_xxx)
+            Dim Row As Long
+
+            For Row = SheetStartRow To ws.UsedRange.Rows.Count
+                Select Case GetCellValue(ws, Row, 1).ToUpper
+                    Case "FIELDS"
+                        If SectionStartRow > 0 Then ProcessSection(ws, HeaderData, DetailsData, ExtraTables, CurrentSection, SectionStartRow, Row - 2)
+                        SectionStartRow = Row + 1
+                        CurrentSection = GetCellValue(ws, Row, 1).ToString
+                    Case "DETAILS"
+                        If SectionStartRow > 0 Then ProcessSection(ws, HeaderData, DetailsData, ExtraTables, CurrentSection, SectionStartRow, Row - 2)
+                        SectionStartRow = Row + 1
+                        CurrentSection = GetCellValue(ws, Row, 1).ToString
+                    Case Else
+                        If Left(GetCellValue(ws, Row, 1).ToUpper, 6) = "TABLE_" Then
+                            If SectionStartRow > 0 Then ProcessSection(ws, HeaderData, DetailsData, ExtraTables, CurrentSection, SectionStartRow, Row - 2)
+                            SectionStartRow = Row + 1
+                            CurrentSection = GetCellValue(ws, Row, 1).ToString
+                        End If
+                End Select
+            Next
+
+            If SectionStartRow > 0 Then ProcessSection(ws, HeaderData, DetailsData, ExtraTables, CurrentSection, SectionStartRow, Row - 1)
+        Next
+        wb.Close(False)
+
+    End Sub
+
+    Private Sub ProcessSection(ws As Excel.Worksheet, ByRef HeaderData As Dictionary(Of String, String), ByRef DetailsData As DataTable, ByRef ExtraTables As Dictionary(Of String, DataTable), Section As String, StartRow As Long, EndRow As Long)
+        Dim dt As New DataTable
+
+        ' Read the contents of each sheet getting the "Fields/Details/Table_XXX" content (Fields -> HeaderData, Details -> DetailsData, Table_xxx -> xxx DataTable)
+        Select Case Section.ToUpper
+            Case "FIELDS"
+                ' If Trial - Ignore PDF2XL Content at Top
+                ReadRangeToDataTable(dt, ws, 0, StartRow, EndRow)
+
+                For Row As Long = 0 To dt.Rows.Count - 1
+                    AddHeaderData(HeaderData, dt.Rows(Row)(0).ToString, dt.Rows(Row)(1).ToString)
+                Next
+
+            Case "DETAILS"
+                ReadRangeToDataTable(dt, ws, StartRow, StartRow + 1, EndRow)
+
+                DetailsData = CreateDetailsDataTable()
+
+                For Row As Long = 0 To dt.Rows.Count - 1
+                    Dim dr As DataRow = DetailsData.NewRow
+                    Dim AddRow As Boolean = True
+
+                    For Column As Integer = 0 To dt.Columns.Count - 1
+                        If DetailsData.Columns.Contains(dt.Columns(Column).ColumnName) Then
+                            Select Case dt.Columns(Column).ColumnName
+                                Case "Qty", "UnitExGST", "UnitIncGST", "ExtendedExGST", "ExtendedIncGST"
+                                    Dim Value As String = Replace(dt.Rows(Row)(Column).ToString, "$", "")
+                                    If Not IsNumeric(Value) Then
+                                        AddRow = False
+                                    Else
+                                        dr(dt.Columns(Column).ColumnName) = Value
+                                    End If
+                                Case Else
+                                    dr(dt.Columns(Column).ColumnName) = dt.Rows(Row)(Column).ToString
+                            End Select
+                        End If
+                    Next
+
+                    If AddRow Then
+                        dr("ID") = Row + 1
+                        DetailsData.Rows.Add(dr)
+                    End If
+                Next
+
+            Case Else
+                If Left(Section.ToUpper, 6) = "TABLE_" Then
+                    ReadRangeToDataTable(dt, ws, StartRow, StartRow + 1, EndRow)
+
+                    ' Add to Tables Dictionary
+                    ExtraTables.Add(Section, dt)
+                Else
+                    ' TO DO - Unsupported
+                    Log(LogLevels.Warning, "The Worksheet/Section '" + Section + "' was not processed as the naming convention is unsupported.")
+                End If
+        End Select
+
+    End Sub
+
+    Private Sub UpdateDetails(ByRef DetailsData As DataTable)
+        ' Validate the Detail Line Contents
+        For RowIdx As Long = 0 To DetailsData.Rows.Count - 1
+            UpdateMissingDataInDetailRow(DetailsData, RowIdx)
+        Next
+    End Sub
+
+    Private Sub UpdateMissingDataInDetailRow(ByRef DetailsData As DataTable, RowIdx As Long)
+        ' Get Invoice GST Rate (Default 10%) - TO DO - We shouldget this as a setting from the Classification Matrix
+        Dim GSTRate As Decimal = 10
+
+        ' Update Missing Data
+        With DetailsData.Rows(RowIdx)
+            ' **** MISSING EX GST PRICES ***
+            ' Missing Unit Ex but have Extended Ex
+            If .Item("UnitExGST").ToString = "" And .Item("ExtendedExGST").ToString <> "" Then .Item("UnitExGST") = Math.Round(.Item("ExtendedExGST") / .Item("Qty"), 2)
+
+            ' Missing Extended Ex but have Unit Ex
+            If .Item("ExtendedExGST").ToString = "" And .Item("UnitExGST").ToString <> "" Then .Item("ExtendedExGST") = Math.Round(.Item("UnitExGST") * .Item("Qty"), 2)
+
+            ' Need to Assume GST is Included
+            ' Missing Unit Ex GST - ExtGST = IncGST / 1.1
+            If .Item("UnitExGST").ToString = "" And .Item("UnitIncGST").ToString <> "" Then .Item("UnitExGST") = Math.Round(.Item("UnitIncGST") / ((100 + GSTRate) / 100), 2)
+
+            ' Missing Extended Ex GST - ExtGST = IncGST / 1.1
+            If .Item("ExtendedExGST").ToString = "" And .Item("ExtendedIncGST").ToString <> "" Then .Item("ExtendedExGST") = Math.Round(.Item("ExtendedIncGST") / ((100 + GSTRate) / 100), 2)
+
+
+            ' **** MISSING INC GST PRICES ***
+            ' Missing Unit Inc but have Extended Inc
+            If .Item("UnitIncGST").ToString = "" And .Item("ExtendedIncGST").ToString <> "" Then .Item("UnitIncGST") = Math.Round(.Item("ExtendedIncGST") / .Item("Qty"), 2)
+
+            ' Missing Extended Inc GST but have Unit Inc GST
+            If .Item("ExtendedIncGST").ToString = "" And .Item("UnitIncGST").ToString <> "" Then .Item("ExtendedIncGST") = Math.Round(.Item("UnitIncGST") * .Item("Qty"), 2)
+
+            ' Need to Assume GST is Included
+            ' Missing Unit Inc GST but not Unit Ex 
+            If .Item("UnitIncGST").ToString = "" And .Item("UnitExGST").ToString <> "" Then .Item("UnitIncGST") = Math.Round(.Item("UnitExGST") * ((100 + GSTRate) / 100), 2)
+
+            ' Missing Extended Inc GST but not Extended Ex
+            If .Item("ExtendedIncGST").ToString = "" And .Item("ExtendedExGST").ToString <> "" Then .Item("ExtendedIncGST") = Math.Round(.Item("ExtendedExGST") * ((100 + GSTRate) / 100), 2)
+
+            ' Check if GST Free
+            .Item("GSTFree") = (.Item("ExtendedExGST").ToString = .Item("ExtendedIncGST").ToString)
+        End With
+    End Sub
+
+    Private Sub AddDetailLineIfValid(ByRef DetailsData As DataTable, Code As String, Description As String, Qty As Decimal, UnitExGST As Decimal, UnitIncGST As Decimal, ExtendedExGST As Decimal, ExtendedIncGST As Decimal)
+
+        If IsNumeric(UnitExGST) Or IsNumeric(UnitIncGST) Or IsNumeric(ExtendedExGST) Or IsNumeric(ExtendedIncGST) Then
+            If UnitExGST <> 0 Or UnitIncGST <> 0 Or ExtendedExGST <> 0 Or ExtendedIncGST <> 0 Then
+                ' Find Last ID
+                Dim LastID As Long = Convert.ToInt64(DetailsData.Select("ID=max(ID)")(0)("ID"))
+
+                Dim dr As DataRow = DetailsData.NewRow
+
+                dr("ID") = LastID + 1
+                dr("Code") = Code
+                dr("Description") = Description
+                dr("Qty") = Qty
+                dr("UnitExGST") = UnitExGST
+                dr("UnitIncGST") = UnitIncGST
+                dr("ExtendedExGST") = ExtendedExGST
+                dr("ExtendedIncGST") = ExtendedIncGST
+
+                DetailsData.Rows.Add(dr)
+
+                UpdateMissingDataInDetailRow(DetailsData, DetailsData.Rows.Count - 1)
+            End If
+
         End If
 
     End Sub
 
-    Private Sub SetInvoiceInvalid(d As Dictionary(Of String, String), Exception As String)
-        If d.ContainsKey("InvoiceValid") Then
-            d("InvoiceValid") = "FALSE"
+    Private Sub UpdateAndValidateHeader(ByRef HeaderData As Dictionary(Of String, String), ByRef DetailsData As DataTable)
+        ' Get Invoice GST Rate (Default 10%) - TO DO - We shouldget this as a setting from the Classification Matrix
+        Dim GSTRate As Decimal = 10
+
+        ' If Freight or Account Fees In Header than add to Details
+        Dim InvFreightIncGST As String = Replace(GetHeaderData(HeaderData, "InvoiceFreightIncGST", ""), "$", "")
+        Dim InvFreightExGST As String = Replace(GetHeaderData(HeaderData, "InvoiceFreightExGST", ""), "$", "")
+        Dim InvAccFeeIncGST As String = Replace(GetHeaderData(HeaderData, "InvoiceAccountFeeIncGST", ""), "$", "")
+        Dim InvAccFeeExGST As String = Replace(GetHeaderData(HeaderData, "InvoiceAccountFeeExGST", ""), "$", "")
+
+        AddDetailLineIfValid(DetailsData, "FREIGHT", "Freight From Invoice Footer", 1, InvFreightExGST, InvFreightIncGST, InvFreightExGST, InvFreightIncGST)
+        AddDetailLineIfValid(DetailsData, "ACCOUNTFEE", "Account Keeping Fee From Invoice Footer", 1, InvAccFeeExGST, InvAccFeeIncGST, InvAccFeeExGST, InvAccFeeIncGST)
+
+        ' Check for Required Data (Invoice Totals)
+        Dim InvTotIncGST As String = Replace(GetHeaderData(HeaderData, "InvoiceTotalIncGST", ""), "$", "")
+        Dim InvTotExGST As String = Replace(GetHeaderData(HeaderData, "InvoiceTotalExGST", ""), "$", "")
+        Dim InvTotGST As String = Replace(GetHeaderData(HeaderData, "InvoiceTotalGST", ""), "$", "")
+
+        ' Update/Add the Inoive Totals
+        ' Total Inc is Blank and we have Total Ex and Total GST
+        If InvTotIncGST = "" And IsNumeric(InvTotExGST) And IsNumeric(InvTotGST) Then
+            InvTotIncGST = CDec(InvTotExGST) + CDec(InvTotGST)
+            AddHeaderData(HeaderData, "InvoiceTotalIncGST", InvTotIncGST)
+        End If
+
+        ' Total Inc & Total GST is Blank and we have Total Ex
+        If InvTotIncGST = "" And InvTotGST = "" And IsNumeric(InvTotExGST) Then
+            InvTotIncGST = Math.Round(CDec(InvTotExGST) * ((100 + GSTRate) / 100), 2)
+            AddHeaderData(HeaderData, "InvoiceTotalIncGST", InvTotIncGST)
+        End If
+
+        ' Total Ex is Blank and we have Total Inc and Total GST
+        If InvTotExGST = "" And IsNumeric(InvTotIncGST) And IsNumeric(InvTotGST) Then
+            InvTotExGST = CDec(InvTotIncGST) - CDec(InvTotGST)
+            AddHeaderData(HeaderData, "InvoiceTotalExGST", InvTotIncGST)
+        End If
+
+        ' Total Ex & Total GST is Blank and we have Total Inc -> IncGST / 1.1 (10%)
+        If InvTotExGST = "" And InvTotGST = "" And IsNumeric(InvTotIncGST) Then
+            InvTotExGST = Math.Round(CDec(InvTotIncGST) / ((100 + GSTRate) / 100), 2)
+            AddHeaderData(HeaderData, "InvoiceTotalExGST", InvTotIncGST)
+        End If
+
+        If InvTotIncGST = "" Or InvTotExGST = "" Then ' If all Totals are empty - invalid invoice
+            SetInvoiceInvalid(HeaderData, "Insuffient Invoice Totals Provided - Must Have at Least Total Inc or Excluding GST")
         Else
-            d.Add("InvoiceValid", "FALSE")
+            ' Get the Total of Invoice from Detail Lines
+            Dim SumQty As Decimal
+            Dim SumExtendedExGST As Decimal
+            Dim SumExtendedIncGST As Decimal
+
+            For RowIdx As Long = 0 To DetailsData.Rows.Count - 1
+                With DetailsData.Rows(RowIdx)
+                    SumQty += .Item("Qty")
+                    SumExtendedExGST += .Item("ExtendedExGST")
+                    SumExtendedIncGST += .Item("ExtendedIncGST")
+                End With
+            Next
+
+            Log(LogLevels.Info, "Sum of Details Qty - " + SumQty.ToString)
+            Log(LogLevels.Info, "Sum of Details Extended Ex GST - " + SumExtendedExGST.ToString)
+            Log(LogLevels.Info, "Sum of Details Extended Inc GST - " + SumExtendedIncGST.ToString)
+
+            ' Validate Invoice Total Against Details Totals
+            If CDec(InvTotIncGST) <> SumExtendedIncGST Then
+                SetInvoiceInvalid(HeaderData, "Invoice Total Including GST doesn't match detail lines.")
+            ElseIf CDec(InvTotExGST) <> SumExtendedExGST Then
+                SetInvoiceInvalid(HeaderData, "Invoice Total Excluding GST doesn't match detail lines.")
+            End If
+
+            ' Validate Total Item Count Against Details Qtys (If Available)
+            If IsNumeric(GetHeaderData(HeaderData, "InvoiceTotalQty", "")) Then
+                If CDec(GetHeaderData(HeaderData, "InvoiceTotalQty", "")) <> SumQty Then
+                    SetInvoiceInvalid(HeaderData, "Invoice Total Quantity doesn't match detail lines.")
+                End If
+            End If
+        End If
+    End Sub
+
+    Private Sub ReadRangeToDataTable(ByRef dt As DataTable, ws As Excel.Worksheet, HeaderRow As Long, StartRow As Long, EndRow As Long)
+        Dim SheetContents As Object
+
+        dt = New DataTable
+
+        If HeaderRow <= 0 Then
+            For i As Long = 1 To ws.UsedRange.Columns.Count
+                dt.Columns.Add("Field" + i.ToString, GetType(String))
+            Next
+        Else
+            For i As Long = 1 To ws.UsedRange.Columns.Count
+                dt.Columns.Add(GetCellValue(ws, HeaderRow, i), GetType(String))
+            Next
+        End If
+
+        If StartRow <= 0 Then StartRow = 1
+
+        Dim Myrange As Excel.Range = ws.Range(ws.Cells(StartRow, 1), ws.Cells(EndRow, ws.UsedRange.Columns.Count))
+
+        Myrange.UnMerge()
+
+        ' Get the Sheet Contents into Array for fast reading
+        SheetContents = Myrange.Value
+
+        ' Go through each row 
+        For Row As Long = 1 To UBound(SheetContents, 1)
+            Dim dr As DataRow = dt.NewRow
+
+            ' With each Column 
+            For Column As Long = 1 To UBound(SheetContents, 2)
+                Dim ColIdx As Integer = Column - 1
+                If IsNothing(SheetContents(Row, Column)) Then
+                    dr(ColIdx) = ""
+                Else
+                    dr(ColIdx) = SheetContents(Row, Column).ToString
+                End If
+            Next
+            dt.Rows.Add(dr)
+        Next
+
+    End Sub
+
+    Private Sub SetInvoiceInvalid(d As Dictionary(Of String, String), Exception As String)
+        If d.ContainsKey("DocumentValid") Then
+            d("DocumentValid") = "FALSE"
+        Else
+            d.Add("DocumentValid", "FALSE")
         End If
 
         If d.ContainsKey("Exceptions") Then
@@ -409,120 +588,53 @@ Module ExtractDocumentInformation
 
     End Sub
 
-    Private Function GetProcessingTemplateData(ProcessingTemplate As String) As Data.DataTable
-        Dim wbTemplate As Excel.Workbook
-        Dim wsTemplate As Excel.Worksheet
+    Private Function GetDocumentClassificationMatrix(Spreadsheet As String) As Data.DataTable
+        Dim wb As Excel.Workbook
+        Dim ws As Excel.Worksheet
 
-        If IsNothing(ExcelApp) Then
-            ExcelApp = New Excel.Application
-            ExcelApp.Visible = True
-        End If
-
-        wbTemplate = ExcelApp.Workbooks.Open(ProcessingTemplate,, True)
+        wb = ExcelApp.Workbooks.Open(Spreadsheet, [ReadOnly]:=True)
 
         ' Set the Worksheet
-        wsTemplate = wbTemplate.ActiveSheet
+        ws = wb.Sheets(1)
 
         Dim dt As New Data.DataTable
 
-        ' Create four typed columns in the DataTable.
-        dt.Columns.Add("Field", GetType(String))
-        dt.Columns.Add("Comment", GetType(String))
+        ' Create typed columns in the DataTable.
+        dt.Columns.Add("Priority", GetType(String))
+        dt.Columns.Add("DocumentType", GetType(String))
+        dt.Columns.Add("DocumentSourceReference", GetType(String))
+        dt.Columns.Add("Description", GetType(String))
 
-        dt.Columns.Add("SearchText", GetType(String))
-        dt.Columns.Add("SearchDirection", GetType(String))
-
-        dt.Columns.Add("AnchorPosition", GetType(String))
-        dt.Columns.Add("AnchorCellsToMove", GetType(String))
-        dt.Columns.Add("AnchorRowStart", GetType(String))
-        dt.Columns.Add("AnchorRowEnd", GetType(String))
-        dt.Columns.Add("AnchorColumnStart", GetType(String))
-        dt.Columns.Add("AnchorColumnEnd", GetType(String))
-
-        dt.Columns.Add("ValueMaxChars", GetType(String))
-
-        dt.Columns.Add("RowSpan", GetType(String))
-
-        For DetailsCol As Long = 1 To 7
-            Dim DetailHeader As String = ""
-
-            Select Case DetailsCol
-                Case 1 : DetailHeader = "ItemsCode"
-                Case 2 : DetailHeader = "ItemsDescription"
-                Case 3 : DetailHeader = "ItemsQty"
-                Case 4 : DetailHeader = "ItemsExTax"
-                Case 5 : DetailHeader = "ItemsIncTax"
-                Case 6 : DetailHeader = "ItemsExExtended"
-                Case 7 : DetailHeader = "ItemsIncExtended"
-            End Select
-
-            dt.Columns.Add(DetailHeader + "Header", GetType(String))
-            dt.Columns.Add(DetailHeader + "SheetColumn", GetType(String))
-            dt.Columns.Add(DetailHeader + "CellColumnSplit", GetType(String))
-            dt.Columns.Add(DetailHeader + "CellColumn", GetType(String))
-            dt.Columns.Add(DetailHeader + "Length", GetType(String))
-        Next
+        dt.Columns.Add("SearchText1", GetType(String))
+        dt.Columns.Add("SearchText2", GetType(String))
+        dt.Columns.Add("SearchText3", GetType(String))
 
         ' Get the Sheet Contents into Array for fast reading
         Dim SheetContents As Object
-        SheetContents = wsTemplate.Range(wsTemplate.Cells(3, 1), wsTemplate.Cells(wsTemplate.UsedRange.Rows.Count, wsTemplate.UsedRange.Columns.Count)).Value
+        SheetContents = ws.Range(ws.Cells(2, 1), ws.Cells(ws.UsedRange.Rows.Count, ws.UsedRange.Columns.Count)).Value
 
         ' Read Rows
-        For r As Long = 1 To UBound(SheetContents)
+        For Row As Long = 1 To UBound(SheetContents)
             Dim dr As DataRow = dt.NewRow
 
-            dr("Field") = SheetContents(r, 1)
-            dr("Comment") = SheetContents(r, 2)
+            dr("Priority") = SheetContents(Row, 1)
+            dr("DocumentType") = SheetContents(Row, 2)
+            dr("DocumentSourceReference") = SheetContents(Row, 3)
+            dr("Description") = SheetContents(Row, 4)
 
-            dr("SearchText") = SheetContents(r, 3)
-            dr("SearchDirection") = SheetContents(r, 4)
-
-            dr("AnchorPosition") = SheetContents(r, 5)
-            dr("AnchorCellsToMove") = SheetContents(r, 6)
-            dr("AnchorRowStart") = SheetContents(r, 7)
-            dr("AnchorRowEnd") = SheetContents(r, 8)
-            dr("AnchorColumnStart") = SheetContents(r, 9)
-            dr("AnchorColumnEnd") = SheetContents(r, 10)
-
-            dr("ValueMaxChars") = SheetContents(r, 11)
-
-            dr("RowSpan") = SheetContents(r, 12)
-
-            ' Get the Detail Lines Settings
-            Dim ColStart As Long = 13
-
-            For DetailsCol As Long = 1 To 7
-                Dim DetailHeader As String = ""
-
-                Select Case DetailsCol
-                    Case 1 : DetailHeader = "ItemsCode"
-                    Case 2 : DetailHeader = "ItemsDescription"
-                    Case 3 : DetailHeader = "ItemsQty"
-                    Case 4 : DetailHeader = "ItemsExTax"
-                    Case 5 : DetailHeader = "ItemsIncTax"
-                    Case 6 : DetailHeader = "ItemsExExtended"
-                    Case 7 : DetailHeader = "ItemsIncExtended"
-                End Select
-
-                If DetailsCol > 1 Then ColStart = ColStart + 5
-
-                dr(DetailHeader + "Header") = SheetContents(r, ColStart)
-                dr(DetailHeader + "SheetColumn") = SheetContents(r, ColStart + 1)
-                dr(DetailHeader + "CellColumnSplit") = SheetContents(r, ColStart + 2)
-                dr(DetailHeader + "CellColumn") = SheetContents(r, ColStart + 3)
-                dr(DetailHeader + "Length") = SheetContents(r, ColStart + 4)
-            Next
+            dr("SearchText1") = SheetContents(Row, 5)
+            dr("SearchText2") = SheetContents(Row, 6)
+            dr("SearchText3") = SheetContents(Row, 7)
 
             dt.Rows.Add(dr)
         Next
 
-        wbTemplate.Close(False)
+        wb.Close(False)
 
         Return dt
-
     End Function
 
-    Private Function CreasteDetailsDataTable() As Data.DataTable
+    Private Function CreateDetailsDataTable() As Data.DataTable
         Dim dt As New Data.DataTable
 
         ' Create typed columns in the DataTable.
@@ -530,24 +642,154 @@ Module ExtractDocumentInformation
         dt.Columns.Add("Code", GetType(String))
         dt.Columns.Add("Description", GetType(String))
         dt.Columns.Add("Qty", GetType(Decimal))
-        dt.Columns.Add("UnitExTax", GetType(Decimal))
-        dt.Columns.Add("UnitIncTax", GetType(Decimal))
-        dt.Columns.Add("ExtendedExTax", GetType(Decimal))
-        dt.Columns.Add("ExtendedIncTax", GetType(Decimal))
+        dt.Columns.Add("UnitExGST", GetType(Decimal))
+        dt.Columns.Add("UnitIncGST", GetType(Decimal))
+        dt.Columns.Add("ExtendedExGST", GetType(Decimal))
+        dt.Columns.Add("ExtendedIncGST", GetType(Decimal))
+        dt.Columns.Add("GSTFree", GetType(Boolean))
 
         Return dt
-
     End Function
 
+    Private Function GetPostConversionTasks(Spreadsheet As String) As Data.DataTable
+        Dim wb As Excel.Workbook
+        Dim ws As Excel.Worksheet
+
+        Dim dt As New Data.DataTable
+
+        ' Create typed columns in the DataTable.
+        dt.Columns.Add("Action", GetType(String))
+        dt.Columns.Add("Source", GetType(String))
+        dt.Columns.Add("FieldName", GetType(String))
+        dt.Columns.Add("Comment", GetType(String))
+
+        dt.Columns.Add("ContentSearchExp", GetType(String))
+        dt.Columns.Add("ContentColumn", GetType(String))
+        dt.Columns.Add("ContentFindText", GetType(String))
+        dt.Columns.Add("ContentReplaceText", GetType(String))
+        dt.Columns.Add("ContentMaxChars", GetType(String))
+
+        If File.Exists(Spreadsheet) Then
+            wb = ExcelApp.Workbooks.Open(Spreadsheet, [ReadOnly]:=True)
+
+            ' Set the Worksheet
+            ws = wb.Sheets(1)
+
+            ' Get the Sheet Contents into Array for fast reading
+            Dim SheetContents As Object
+            SheetContents = ws.Range(ws.Cells(3, 1), ws.Cells(ws.UsedRange.Rows.Count, ws.UsedRange.Columns.Count)).Value
+
+            ' Read Rows
+            For Row As Long = 1 To UBound(SheetContents)
+                Dim dr As DataRow = dt.NewRow
+
+                dr("Action") = SheetContents(Row, 1)
+                dr("Source") = SheetContents(Row, 2)
+                dr("FieldName") = SheetContents(Row, 3)
+                dr("Comment") = SheetContents(Row, 4)
+
+                dr("ContentSearchExp") = SheetContents(Row, 5)
+                dr("ContentColumn") = SheetContents(Row, 6)
+                dr("ContentFindText") = SheetContents(Row, 7)
+                dr("ContentReplaceText") = SheetContents(Row, 8)
+                dr("ContentMaxChars") = SheetContents(Row, 9)
+
+                dt.Rows.Add(dr)
+            Next
+
+            wb.Close(False)
+        End If
+
+        Return dt
+    End Function
+
+
+    Private Sub CleanInvoiceDetails(ByRef DetailsData As DataTable, dr As DataRow)
+        Dim SearchExpression As String = dr("ContentSearchExp")
+        SearchExpression = Replace(SearchExpression, """", "'")
+
+        Log(LogLevels.Info, "Cleaning Invoice Details (" + SearchExpression + ")")
+
+        DetailsData = DetailsData.Select(SearchExpression).CopyToDataTable()
+
+        Log(LogLevels.Info, "Invoice Details Remaining - " + DetailsData.Rows.Count.ToString)
+    End Sub
+
+    Private Sub UpdateHeaderContent(ByRef HeaderData As Dictionary(Of String, String), DetailsData As DataTable, ExtraTables As Dictionary(Of String, DataTable), dr As DataRow)
+        Dim dt As New DataTable
+
+        Select Case dr("Action").ToString.ToUpper
+            Case "Get Header Content".ToUpper
+                Dim SearchExpression As String = dr("ContentSearchExp").ToString
+                SearchExpression = Replace(SearchExpression, """", "'")
+                Dim Source As String = dr("Source").ToString
+
+                If Source.ToUpper = "DETAILS" Then
+                    dt = DetailsData
+                ElseIf Left(Source.ToUpper, 6) = "TABLE_" Then
+                    If ExtraTables.ContainsKey(Source) Then
+                        dt = ExtraTables(Source)
+                    Else
+                        Log(LogLevels.Warning, "Unable to find Source Content '" + Source + "'")
+                    End If
+                End If
+
+                Log(LogLevels.Info, "Getting Header Content (" + SearchExpression + ")")
+
+                Try
+                    dt = dt.Select(SearchExpression).CopyToDataTable()
+
+                    If dt.Rows.Count > 0 Then
+                        Log(LogLevels.Info, "Getting Header Content - Rows = " + dt.Rows.Count.ToString)
+
+                        ' Get the Field Number/Name and ther Max Chars
+                        Dim Field As String = dr("ContentColumn").ToString
+                        Dim MaxChars As String = dr("ContentMaxChars").ToString
+                        Dim Value As String = ""
+
+                        If IsNumeric(Field) Then
+                            Dim Column As Integer = CInt(Field) - 1
+                            Value = dt.Rows(0)(Column).ToString
+                        Else
+                            Value = dt.Rows(0)(Field).ToString
+                        End If
+
+                        AddHeaderData(HeaderData, dr("FieldName").ToString, Value)
+                    Else
+                        Log(LogLevels.Warning, "0 rows returned - Header not updated.")
+                    End If
+
+                Catch ex As Exception
+                    Log(LogLevels.Warning, "Error retrieving content from Source Table - Error: " + ex.Message)
+
+                End Try
+
+            Case "Replace Header Content".ToUpper
+                Dim FieldName As String = dr("FieldName").ToString
+                Dim FindText As String = dr("ContentFindText").ToString
+                Dim Replacetext As String = dr("ContentReplaceText").ToString
+
+                ' Get the Existing Value
+                Dim value As String = GetHeaderData(HeaderData, FieldName)
+                ' Replace the text
+                value = Replace(value, FindText, Replacetext)
+                ' Update the Header Data
+                AddHeaderData(HeaderData, FieldName, value)
+
+        End Select
+
+    End Sub
+
+
     Private Function GetCompanyName(ABN As String) As String
-        Dim Search As httpXMLSearch
+        Dim Search As CompanySearch_httpXMLSearch
         Dim SearchPayload As String
         Dim MainName As String = ""
         Dim MainTradingName As String = ""
         Dim CompanyName As String = ""
 
         Log(LogLevels.Trace, "GetCompanyName - Declaring Search Variable...")
-        Search = New httpXMLDocumentSearch
+        Search = New CompanySearch_httpXMLDocumentSearch
 
         Log(LogLevels.Trace, "GetCompanyName - Performing ABN Search...")
         SearchPayload = Search.ABNSearch(ABN, "n", "371f387c-0a3b-420b-ac39-00bb04f5b85f")
@@ -559,309 +801,5 @@ Module ExtractDocumentInformation
 
     End Function
 
-    Private Function GetValueFromSpreadsheet(Field As String, FieldType As FieldTypes, TemplateData As Data.DataTable, Optional ByRef RowSpan As Long = 0) As String
-        Dim sResult As String = ""
-        Dim lRow As Long = 0
-
-        ' Filter DataTable to Field
-        Dim rows As Data.DataRow() = TemplateData.Select("Field = '" + Field + "'")
-
-        For Each row As DataRow In rows
-            GetContentForFieldUsingAnchor(Field, FieldType, row, sResult, lRow)
-            If sResult <> "" Then
-                ' For Details Header/Lines get if they span multiple Rows
-                If IsNumeric(row("RowSpan").ToString) Then
-                    RowSpan = row("RowSpan").ToString
-                Else
-                    RowSpan = 1
-                End If
-
-                Exit For
-            End If
-        Next
-
-        Return sResult
-    End Function
-
-    Private Function GetRowFromSpreadsheet(Field As String, FieldType As FieldTypes, TemplateData As Data.DataTable, Optional ByRef RowSpan As Long = 0) As Long
-        Dim sResult As String = ""
-        Dim lRow As Long = 0
-
-        ' Filter DataTable to Field
-        Dim rows As Data.DataRow() = TemplateData.Select("Field = '" + Field + "'")
-
-        For Each row As DataRow In rows
-            GetContentForFieldUsingAnchor(Field, FieldType, row, sResult, lRow)
-
-            If lRow > 0 Then
-                ' For Details Header/Lines get if they span multiple Rows
-                If IsNumeric(row("RowSpan").ToString) Then
-                    RowSpan = row("RowSpan").ToString
-                Else
-                    RowSpan = 1
-                End If
-
-                Exit For
-            End If
-        Next
-
-        Return lRow
-    End Function
-
-    Private Function GetColForDetailFromSpreadsheet(TemplateData As Data.DataTable, DetailHeader As String, RowStart As Long, RowEnd As Long, ByRef CellColumnSplit As String, ByRef CellColumn As String) As Long
-        Dim sResult As String = ""
-        Dim lRow As Long = 0
-        Dim lCol As Long = 0
-
-        ' Filter DataTable to Field
-        Dim rows As Data.DataRow() = TemplateData.Select("Field = 'InvoiceDetails'")
-
-        For Each row As DataRow In rows
-
-            ' **** Find the Column holding the Data ****
-            Dim MaxLength As String = row(DetailHeader + "Length").ToString
-
-            ' If Column is specified in Template return this
-            If IsNumeric(row(DetailHeader + "SheetColumn").ToString) Then
-                lCol = CLng(row(DetailHeader + "SheetColumn").ToString)
-
-            ElseIf row(DetailHeader + "Header").ToString <> "" Then ' Search for it in the Header Rows
-                GetUsingAnchor(False, FieldTypes.String, row(DetailHeader + "Header").ToString, "", "", "", RowStart, RowEnd, "", "", MaxLength, sResult, lRow, lCol)
-            End If
-
-            ' Get the Cell Column Split Content
-            CellColumnSplit = row(DetailHeader + "CellColumnSplit").ToString
-            CellColumn = row(DetailHeader + "CellColumn").ToString
-        Next
-
-        Return lCol
-    End Function
-
-    Private Sub GetContentForFieldUsingAnchor(Field As String, FieldType As FieldTypes, row As Data.DataRow, ByRef ResultValue As String, Optional ByRef ResultRow As Long = 0, Optional ByRef ResultColumn As Long = 0)
-
-        GetUsingAnchor(True,
-                       FieldType,
-                       row("SearchText").ToString,
-                       row("SearchDirection").ToString,
-                       row("AnchorPosition").ToString,
-                       row("AnchorCellsToMove").ToString,
-                       row("AnchorRowStart").ToString,
-                       row("AnchorRowEnd").ToString,
-                       row("AnchorColumnStart").ToString,
-                       row("AnchorColumnEnd").ToString,
-                       row("ValueMaxChars").ToString,
-                       ResultValue,
-                       ResultRow,
-                       ResultColumn)
-
-        If ResultValue <> "" Then
-            Debug.Print("Found " + Field + " Value in Row " + (ResultRow).ToString + " Column " + (ResultColumn).ToString + " = " + ResultValue)
-        End If
-
-    End Sub
-
-    Private Sub GetUsingAnchor(GetData As Boolean, FieldType As FieldTypes, SearchText As String, SearchDirection As String, AnchorPosition As String, AnchorCellsToMove As String, RowStart As String, RowEnd As String, ColStart As String, ColEnd As String, ValueMaxChars As String, ByRef ResultValue As String, Optional ByRef ResultRow As Long = 0, Optional ByRef ResultColumn As Long = 0)
-        Dim sInput As String
-        Dim sResult As String = ""
-        Dim SearchPattern As String = ""
-        Dim r As Long
-        Dim c As Long
-        Dim RowsAdded As Long
-        Dim ColumnsAdded As Long
-
-        ' Get the Defulat Row & Col Start, End & Step Settings (Direction - Top Down)
-        Dim rStart As Long = 1
-        Dim rEnd As Long = UBound(SheetContents, 1)
-        Dim rStep As Long = 1
-        Dim cStart As Long = 1
-        Dim cEnd As Long = UBound(SheetContents, 2)
-        Dim cStep As Long = 1
-
-        ' Get the Search Direction
-        If SearchDirection.ToUpper = "BOTTOM UP" Then
-            rStart = UBound(SheetContents, 1)
-            rEnd = 1
-            rStep = -1
-            cStart = UBound(SheetContents, 2)
-            cEnd = 1
-            cStep = -1
-        End If
-        ' Get the Search Direction
-        If IsNumeric(RowStart) Then rStart = RowStart
-        If IsNumeric(RowEnd) Then rEnd = RowEnd
-        If IsNumeric(ColStart) Then cStart = ColStart
-        If IsNumeric(ColEnd) Then cEnd = ColEnd
-
-        For r = rStart To rEnd Step rStep
-            For c = cStart To cEnd Step cStep
-                RowsAdded = 0
-                ColumnsAdded = 0
-
-                SearchPattern = SearchText
-
-                If SearchPattern <> "" Then
-                    sInput = SheetContents(r, c)
-
-                    If sInput <> "" Then
-
-                        Dim regex As Regex = New Regex(SearchPattern, RegexOptions.IgnoreCase Or RegexOptions.Multiline)
-                        Dim result As MatchCollection = regex.Matches(sInput)
-
-                        If result.Count > 0 Then
-                            If GetData Then
-                                sResult = GetDataForField(sInput, SheetContents, AnchorPosition, AnchorCellsToMove, ValueMaxChars, result, FieldType, r, c, RowsAdded, ColumnsAdded)
-                            Else
-                                sResult = GetField(sInput, result)
-                            End If
-
-                            If sResult <> "" Then
-                                ResultRow = r + RowsAdded
-                                ResultColumn = c + ColumnsAdded
-                            End If
-                        End If
-                    End If
-                End If
-
-                ' Check if we have found result - exit loop 
-                If sResult <> "" Then Exit For
-            Next
-
-            ' Check if we have found result - exit loop 
-            If sResult <> "" Then Exit For
-        Next
-
-        ResultValue = sResult
-
-    End Sub
-
-    Private Function GetDataForField(Input As String, SheetContents As Object, AnchorPosition As String, AnchorCellsToMove As String, ValueMaxChars As String, Result As MatchCollection, FieldType As FieldTypes, r As Long, c As Long, ByRef RowsAdded As Long, ByRef ColumnsAdded As Long) As String
-        Dim sResult As String = ""
-        Dim ResultLength As Long = 0
-        If IsNumeric(ValueMaxChars) Then ResultLength = CLng(ValueMaxChars)
-
-        ' Get the details after the search string
-        ' Get the remaining text and trim
-        sResult = Mid(Input, Result(0).Index + Result(0).Value.Length + 1).Trim
-
-        ' If we have text after the identifier
-        If InStr(sResult, vbCr) - 1 > Len(sResult) Then
-            ' Remove everything past the eol
-            sResult = Strings.Left(sResult, InStr(sResult, vbCr) - 1)
-        End If
-
-        ' Limit to Ascii Non Control Characters (i.e. remove tab, CR, LF, etc)
-        sResult = Regex.Replace(sResult, "[^\x20-\x7E]", "")
-
-        ' See if we have a specified number of cells to move
-        Dim CellsToMove As Long = 0
-        If IsNumeric(AnchorCellsToMove) Then CellsToMove = CLng(AnchorCellsToMove)
-
-        Dim CellsToSearchRight As Integer = 1
-        If AnchorPosition.ToUpper = "LEFT" Then
-            CellsToSearchRight = 5
-        End If
-
-        ' If Empty or we need to search cells --> see if cells to right has value
-        If sResult = "" Or CellsToSearchRight > 1 Then
-            Dim StartCol As Long = 1
-
-            If CellsToMove > 0 Then
-                ColumnsAdded = CellsToMove
-                sResult = SheetContents(r, c + ColumnsAdded)
-                If sResult = "" Then
-                    StartCol = CellsToMove + 1 ' Used in the case this value is blank we search the next column
-                    CellsToSearchRight = CellsToMove + 5
-                End If
-            End If
-
-            If sResult = "" Then
-                ' Check Cells to right
-                For ColumnsAdded = StartCol To CellsToSearchRight
-                    If Not IsNothing(SheetContents(r, c + ColumnsAdded)) Then
-                        sResult = SheetContents(r, c + ColumnsAdded).ToString
-                        If sResult <> "" Then Exit For
-                    End If
-                Next
-            End If
-        End If
-
-        Dim CellsToSearchDown As Integer = 1
-        If AnchorPosition.ToUpper = "ABOVE" Then
-            CellsToSearchDown = 5
-        End If
-
-        ' If Empty or we need to search cells --> see if cells below has value
-        If sResult = "" Or CellsToSearchDown > 1 Then
-            If CellsToMove > 0 Then
-                RowsAdded = CellsToMove
-                sResult = SheetContents(r + RowsAdded, c)
-            Else
-                ' Check Cell below
-                For RowsAdded = 1 To CellsToSearchDown
-                    If Not IsNothing(SheetContents(r + RowsAdded, c)) Then
-                        sResult = SheetContents(r + RowsAdded, c).ToString
-                        If sResult <> "" Then Exit For
-                    Else ' Only Search Cells with values
-                        RowsAdded = RowsAdded - 1
-                    End If
-                Next
-            End If
-        End If
-
-        ' If we are specifying the number of characters, only get these
-        If ResultLength > 0 Then
-            sResult = Strings.Left(sResult, ResultLength)
-        End If
-
-        ' Trim Result
-        sResult = sResult.Trim
-
-        ' Limit to Ascii Non Control Characters (i.e. remove tab, CR, LF, etc)
-        sResult = Regex.Replace(sResult, "[^\x20-\x7E]", "")
-
-        ' Validate & Only Extract Required Data depending on Field Type
-        Select Case FieldType
-            Case FieldTypes.ABN  ' Only get numerical and decimal point characters and make sure it is 11 characters
-                sResult = Regex.Replace(sResult, "[^0-9]", "").Trim
-                If sResult.Length <> 11 Then sResult = ""
-
-            Case FieldTypes.Currency  ' Only get numerical and decimal point characters
-                sResult = Regex.Replace(sResult, "[^0-9.]", "").Trim
-
-            Case FieldTypes.Date ' Only get numerical and - or / characters and Months 
-                Dim regexValue As Regex = New Regex("\d{1,2}(/|-)(\d{1,2}|Jan|January|Feb|February|Mar|March|Apr|April|May|Jun|June|Jul|July|Aug|August|Sep|Septembet|Oct|October|Nov|November|Dec|December)\1(\d{4}|\d{2})", RegexOptions.IgnoreCase Or RegexOptions.Multiline)
-                Result = regexValue.Matches(sResult)
-
-                If Result.Count > 0 Then
-                    sResult = Result(0).Value
-                Else
-                    sResult = ""
-                End If
-
-        End Select
-
-        Return sResult
-    End Function
-
-
-    Private Function GetField(Input As String, Result As MatchCollection) As String
-        Dim sResult As String = ""
-        Dim ResultLength As Long = 0
-
-        ' Get the details after the search string
-        ' Get the remaining text and trim
-        sResult = Input.Trim
-
-        ' If we have text after the identifier
-        If InStr(sResult, vbCr) - 1 > Len(sResult) Then
-            ' Remove everything past the eol
-            sResult = Strings.Left(sResult, InStr(sResult, vbCr) - 1)
-        End If
-
-        ' Limit to Ascii Non Control Characters (i.e. remove tab, CR, LF, etc)
-        sResult = Regex.Replace(sResult, "[^\x20-\x7E]", "")
-
-        Return sResult
-    End Function
 
 End Module
